@@ -1,0 +1,550 @@
+{
+  "id": "sf1-send-safe",
+  "title": "The Safe Send",
+  "extends": "m1-send-metamask",
+  "context": {
+    "wallet": "Safe{Wallet} web (app.safe.global) + MetaMask extension as the owner's signer",
+    "platform": "desktop Chrome",
+    "network": "mainnet",
+    "settings": "app.safe.global prod defaults · 1-of-1 Safe · execute immediately",
+    "version": "web/1.105.0 · safe-wallet-monorepo@7137337 · safe-client-gateway@158f5db",
+    "observed": null,
+    "captures": []
+  },
+  "toggles": [
+    "safe_custom_rpc",
+    "safe_analytics_consent_off",
+    "custom_rpc",
+    "stx_off",
+    "basic_functionality_off",
+    "metametrics_off",
+    "security_alerts_off",
+    "profile_sync_off"
+  ],
+  "_comment": "Safe{Wallet} web, 1-of-1 Safe on mainnet, plain ETH send, executed at once. Code-traced from safe-global/safe-wallet-monorepo@7137337 and safe-global/safe-client-gateway@158f5db; live capture pending. The browser talks to one Safe host, the Client Gateway (CGW, safe-client.safe.global); the Transaction Service, Config Service and Decoder sit behind it. CGW forwards no client IP or headers upstream. The Safe{Wallet} RPC host and the gas oracle host come from the CGW chain config at runtime and are not in either repo: written as unknown. With threshold 1 there is no off-chain signature: Safe{Wallet} proposes the unsigned SafeTx to CGW, then asks MetaMask to sign and send execTransaction; MetaMask's own steps are inherited from m1. New carry: safe_address (the Safe, as opposed to selected_address, the owner).",
+  "prepend_steps": [
+    {
+      "id": "sf-frontend",
+      "phase": "dapp",
+      "name": "app.safe.global",
+      "host": "app.safe.global",
+      "actor": "safe-labs",
+      "purpose": "Serve the Safe{Wallet} code",
+      "need": "T",
+      "carries": ["ip"],
+      "returns": "the code that runs",
+      "can_block": true,
+      "on_failure": "blocks",
+      "worst_lie": {
+        "outcome": "wrong_code",
+        "note": "the served frontend builds the SafeTx you sign"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web (Next.js static app); same-origin probe HEAD /swap at apps/web/src/components/common/GeoblockingProvider/index.tsx:8"
+      },
+      "tx_input": "field",
+      "fixed_by": ["indie-frontends"],
+      "gadget": "frontend"
+    },
+    {
+      "id": "sf-chains",
+      "phase": "dapp",
+      "name": "CGW · chain configs",
+      "host": "safe-client.safe.global/v2/chains",
+      "actor": "safe-labs",
+      "purpose": "Chain list with rpcUri, gas oracle URIs, feature flags and contract addresses",
+      "need": "T",
+      "carries": ["ip"],
+      "returns": "which RPC, gas oracle and features the app uses",
+      "can_block": true,
+      "on_failure": "blocks",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "points every RPC read and the gas oracle at another host, or turns security checks off"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 packages/store/src/gateway/chains/index.ts:80 · host default apps/web/src/config/constants.ts:26-27 · production host safe-client-gateway@158f5db .github/workflows/production.yml:135"
+      },
+      "gadget": "wallet-backend"
+    },
+    {
+      "id": "sf-safe-state",
+      "phase": "dapp",
+      "name": "CGW · Safe info, balances, queue, history",
+      "host": "safe-client.safe.global/v1/chains/1/safes/{safe}",
+      "actor": "safe-labs",
+      "purpose": "Owners, threshold, version, balances, queued and executed txs of the Safe",
+      "need": "R",
+      "carries": ["ip", "safe_address", "holdings"],
+      "returns": "the Safe's state; ETH decimals set the signed value",
+      "can_block": true,
+      "on_failure": "blocks",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "wrong owners, threshold or balances; wrong decimals scale the signed value"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/hooks/loadables/useLoadSafeInfo.ts:52 (15 s poll, apps/web/src/config/constants.ts:36) · balances packages/store/src/gateway/AUTO_GENERATED/balances.ts:11 · decimals into value apps/web/src/components/tx-flow/flows/TokenTransfer/ReviewTokenTransfer.tsx:38-45 (decimals at :45) · CGW → Transaction Service safe-client-gateway@158f5db src/modules/transactions/datasources/transaction-api.service.ts:182-203"
+      },
+      "tx_input": "field",
+      "repeat": "↻ 15 s",
+      "fixed_by": ["local-indexing"],
+      "gadget": "indexer"
+    },
+    {
+      "id": "sf-owner-safes",
+      "phase": "dapp",
+      "name": "CGW · your Safes, by owner",
+      "host": "safe-client.safe.global/v2/owners/{owner}/safes · /v2/safes?wallet_address=",
+      "actor": "safe-labs",
+      "purpose": "List every Safe the connected owner controls; overviews of pinned Safes",
+      "need": "R",
+      "carries": ["ip", "selected_address", "safe_address"],
+      "returns": "all Safes of this owner, on every chain",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "hides or adds Safes in the account list"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 packages/store/src/gateway/AUTO_GENERATED/owners.ts:14 · wallet_address packages/store/src/gateway/safes/index.ts:45 · CGW loops over each chain's Transaction Service safe-client-gateway@158f5db src/modules/transactions/datasources/transaction-api.service.ts:994-1016"
+      },
+      "fixed_by": ["local-indexing"],
+      "gadget": "indexer"
+    },
+    {
+      "id": "sf-turnstile",
+      "phase": "dapp",
+      "name": "Cloudflare Turnstile · captcha",
+      "host": "challenges.cloudflare.com/turnstile/v0/api.js",
+      "actor": "cloudflare",
+      "purpose": "Captcha token for the owner's-Safes request",
+      "need": "T",
+      "carries": ["ip", "device_id"],
+      "returns": "a captcha token",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "none",
+        "note": "no token: the account list does not load"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/components/common/Captcha/CaptchaProvider.tsx:19,58 · CGW also sends the client IP to Cloudflare as remoteip safe-client-gateway@158f5db src/routes/captcha/captcha.service.ts:57"
+      },
+      "optional": true,
+      "notes": "Only when the Turnstile site key is set at deploy time (NEXT_PUBLIC_TURNSTILE_SITE_KEY_PRODUCTION)."
+    },
+    {
+      "id": "sf-rpc-sdk",
+      "phase": "dapp",
+      "name": "Safe{Wallet} RPC · Safe SDK reads + sanctions check",
+      "host": "unknown — rpcUri from the CGW chain config, NEXT_PUBLIC_INFURA_TOKEN appended",
+      "actor": "unknown",
+      "purpose": "Protocol-kit setup on the Safe; Chainalysis isSanctioned(Safe) and isSanctioned(owner)",
+      "need": "R",
+      "carries": ["ip", "safe_address", "selected_address"],
+      "returns": "on-chain Safe state; sanctioned or not",
+      "can_block": true,
+      "on_failure": "blocks",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "wrong on-chain state; a false sanctions hit hides fee-free options"
+      },
+      "removable_by": "safe_custom_rpc",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/hooks/wallets/web3.ts:27 (rpcUri + token) · apps/web/src/hooks/coreSDK/safeCoreSDK.ts:162-167 · sanctions apps/web/src/store/api/ofac.ts:72 (always the default RPC, ignores a custom one)"
+      },
+      "fixed_by": ["verifiable-rpc", "private-rpc"],
+      "gadget": "rpc",
+      "notes": "The host is not in the repo: a live capture would resolve it. The token variable is named INFURA_TOKEN."
+    },
+    {
+      "id": "sf-ga",
+      "phase": "dapp",
+      "name": "Google Analytics",
+      "host": "www.googletagmanager.com (collect host chosen by gtag)",
+      "actor": "google-analytics",
+      "purpose": "Page views and events",
+      "need": "T",
+      "carries": ["ip", "device_id", "safe_address", "selected_address"],
+      "returns": "nothing",
+      "can_block": false,
+      "on_failure": "silent",
+      "worst_lie": {
+        "outcome": "none",
+        "note": ""
+      },
+      "removable_by": "safe_analytics_consent_off",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/services/analytics/Analytics.tsx:21-36 (only after analytics consent) · script host apps/web/src/config/securityHeaders.ts:19"
+      },
+      "optional": true,
+      "repeat": "on every page view and event",
+      "gadget": "analytics"
+    },
+    {
+      "id": "sf-mixpanel",
+      "phase": "dapp",
+      "name": "Mixpanel",
+      "host": "api-eu.mixpanel.com",
+      "actor": "mixpanel",
+      "purpose": "Product analytics; user identity is the Safe",
+      "need": "T",
+      "carries": ["ip", "device_id", "safe_address", "selected_address"],
+      "returns": "nothing",
+      "can_block": false,
+      "on_failure": "silent",
+      "worst_lie": {
+        "outcome": "none",
+        "note": ""
+      },
+      "removable_by": "safe_analytics_consent_off",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/services/analytics/mixpanel.ts:72 · feature MIXPANEL apps/web/src/services/analytics/useMixpanel.ts:36"
+      },
+      "optional": true,
+      "gadget": "analytics",
+      "notes": "Only after analytics consent, with the chain feature MIXPANEL and a token set at deploy time."
+    },
+    {
+      "id": "sf-datadog",
+      "phase": "dapp",
+      "name": "Datadog RUM",
+      "host": "unknown — Datadog SDK intake for site datadoghq.eu",
+      "actor": "datadog",
+      "purpose": "Real-user monitoring: page views, resource URLs, errors",
+      "need": "T",
+      "carries": ["ip", "device_id", "safe_address", "selected_address"],
+      "returns": "nothing",
+      "can_block": false,
+      "on_failure": "silent",
+      "worst_lie": {
+        "outcome": "none",
+        "note": ""
+      },
+      "removable_by": "safe_analytics_consent_off",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/services/analytics/Analytics.tsx:25 (consent) · site default apps/web/src/config/constants.ts:46"
+      },
+      "optional": true,
+      "gadget": "analytics",
+      "notes": "Resource events include CGW paths with the Safe and owner addresses. Sampled sessions only."
+    },
+    {
+      "id": "sf-beamer",
+      "phase": "dapp",
+      "name": "Beamer · what's new",
+      "host": "backend.getbeamer.com",
+      "actor": "beamer",
+      "purpose": "Product-update badge",
+      "need": "T",
+      "carries": ["ip", "device_id"],
+      "returns": "count of new announcements",
+      "can_block": false,
+      "on_failure": "silent",
+      "worst_lie": {
+        "outcome": "none",
+        "note": ""
+      },
+      "removable_by": "safe_analytics_consent_off",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/store/api/beamer.ts:4 · poll apps/web/src/hooks/useWhatsNewUpdates.ts:11"
+      },
+      "optional": true,
+      "repeat": "↻ 5 min",
+      "notes": "Only after the updates cookie consent and with a Beamer ID set at deploy time."
+    },
+    {
+      "id": "sf-zodiac-check",
+      "phase": "dapp",
+      "name": "Zodiac module check",
+      "host": "zodiac-check.safe.global",
+      "actor": "safe-labs",
+      "purpose": "Is the Safe affected by a known module vulnerability",
+      "need": "T",
+      "carries": ["ip", "safe_address"],
+      "returns": "affected or not",
+      "can_block": false,
+      "on_failure": "silent",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "a failed check is treated as not affected"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/features/security/services/vulnerableModules.ts:5-6,13-14"
+      }
+    },
+    {
+      "id": "sf-safe-apps",
+      "phase": "dapp",
+      "name": "CGW · Safe Apps list",
+      "host": "safe-client.safe.global/v1/chains/1/safe-apps",
+      "actor": "safe-labs",
+      "purpose": "App list shown in the send flow",
+      "need": "T",
+      "carries": ["ip"],
+      "returns": "Safe Apps",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "none",
+        "note": ""
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/hooks/safe-apps/useRemoteSafeApps.ts:22-27"
+      }
+    },
+    {
+      "id": "sf-relay-quota",
+      "phase": "construct",
+      "name": "CGW · relay quota",
+      "host": "safe-client.safe.global/v1/chains/1/relay/{safe}",
+      "actor": "safe-labs",
+      "purpose": "Remaining sponsored transactions",
+      "need": "R",
+      "carries": ["ip", "safe_address"],
+      "returns": "relay count",
+      "can_block": false,
+      "on_failure": "silent",
+      "worst_lie": {
+        "outcome": "none",
+        "note": ""
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/features/no-fee-campaign/hooks/useNoFeeCampaignEligibility.ts:20 (called from apps/web/src/hooks/useGasPaymentOptions.ts:29)"
+      }
+    },
+    {
+      "id": "sf-safe-shield",
+      "phase": "construct",
+      "name": "CGW · Safe Shield (recipient + threat analysis)",
+      "host": "safe-client.safe.global/v1/chains/1/security/{safe}/…",
+      "actor": "safe-labs",
+      "purpose": "Recipient history check; the full EIP-712 SafeTx with the owner address goes to threat analysis",
+      "need": "T",
+      "carries": ["ip", "selected_address", "safe_address", "recipient", "amount", "unsigned_tx"],
+      "returns": "warnings shown before you execute",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "hides a poisoned-recipient or malicious-tx warning, or forces a false one"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 packages/store/src/gateway/AUTO_GENERATED/safe-shield.ts:34,51 · apps/web/src/features/safe-shield/hooks/useThreatAnalysis.ts:55-58"
+      },
+      "tx_input": "gate",
+      "fixed_by": ["local-address-risk", "open-simulation"],
+      "gadget": "screening"
+    },
+    {
+      "id": "sf-blockaid",
+      "phase": "construct",
+      "name": "Blockaid · threat analysis (via CGW)",
+      "host": "unknown — @blockaid/client default host, called by CGW",
+      "actor": "blockaid",
+      "purpose": "Scan the SafeTx typed data; CGW calls it server-side",
+      "need": "T",
+      "carries": ["selected_address", "safe_address", "recipient", "amount", "unsigned_tx"],
+      "returns": "threat verdict",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "a false OK hides a malicious transaction"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-client-gateway@158f5db src/modules/safe-shield/threat-analysis/blockaid/blockaid-api.service.ts:56-61 (eth_signTypedData_v4 params, account_address = owner) · only with chain feature RISK_MITIGATION src/modules/safe-shield/safe-shield.service.ts:298"
+      },
+      "tx_input": "gate",
+      "optional": true,
+      "fixed_by": ["open-simulation"],
+      "gadget": "screening",
+      "notes": "No client IP: CGW forwards no client headers upstream. Whether RISK_MITIGATION is on for mainnet is runtime config."
+    },
+    {
+      "id": "sf-rpc-exec",
+      "phase": "construct",
+      "name": "Safe{Wallet} RPC · recipient + execution checks",
+      "host": "unknown — rpcUri from the CGW chain config, NEXT_PUBLIC_INFURA_TOKEN appended",
+      "actor": "unknown",
+      "purpose": "eth_getCode / tx count of the recipient; estimateGas, owner nonce, balance and a test eth_call of execTransaction",
+      "need": "C",
+      "carries": ["ip", "selected_address", "safe_address", "recipient", "amount", "unsigned_tx"],
+      "returns": "gas limit and owner nonce passed to the wallet",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "funds_stuck",
+        "note": "a wrong nonce or gas limit stalls the tx"
+      },
+      "removable_by": "safe_custom_rpc",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/hooks/useGasLimit.ts:58 · apps/web/src/hooks/wallets/web3.ts:62 · apps/web/src/hooks/useIsValidExecution.ts:84-92 · recipient activity packages/utils/src/features/safe-shield/hooks/address-analysis/address-activity/useAddressActivity.ts:28"
+      },
+      "tx_input": "field",
+      "fixed_by": ["verifiable-rpc", "private-rpc"],
+      "gadget": "rpc"
+    },
+    {
+      "id": "sf-nonce-preview",
+      "phase": "construct",
+      "name": "CGW · nonce + tx preview",
+      "host": "safe-client.safe.global/v1/chains/1/safes/{safe}/nonces · /transactions/{safe}/preview",
+      "actor": "safe-labs",
+      "purpose": "Recommended SafeTx nonce; decoded preview of to/value/data",
+      "need": "C",
+      "carries": ["ip", "safe_address", "recipient", "amount", "unsigned_tx"],
+      "returns": "the SafeTx nonce; what the review screen shows",
+      "can_block": true,
+      "on_failure": "blocks",
+      "worst_lie": {
+        "outcome": "funds_stuck",
+        "note": "a reused nonce replaces a queued tx; a misleading preview shows the wrong details"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/components/tx/shared/hooks.ts:329-331 · packages/store/src/gateway/AUTO_GENERATED/safes.ts:14 · preview packages/store/src/gateway/AUTO_GENERATED/transactions.ts:94 (review blocked if it fails)"
+      },
+      "tx_input": "field",
+      "fixed_by": ["local-indexing", "clear-signing"],
+      "gadget": "wallet-backend"
+    },
+    {
+      "id": "sf-gas-oracle",
+      "phase": "construct",
+      "name": "Gas oracle · max fee",
+      "host": "unknown — gasPrice[].uri from the CGW chain config, fetched by the browser",
+      "actor": "unknown",
+      "purpose": "maxFeePerGas / maxPriorityFeePerGas passed to the wallet",
+      "need": "C",
+      "carries": ["ip"],
+      "returns": "gas price",
+      "can_block": false,
+      "on_failure": "degrade",
+      "worst_lie": {
+        "outcome": "false_belief",
+        "note": "overpaying fees"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 packages/utils/src/hooks/useDefaultGasPrice.ts:78 (fetch), :30 (20 s)"
+      },
+      "tx_input": "field",
+      "repeat": "↻ 20 s",
+      "gadget": "price-oracle"
+    },
+    {
+      "id": "sf-propose",
+      "phase": "construct",
+      "name": "CGW · propose (unsigned)",
+      "host": "safe-client.safe.global/v1/chains/1/transactions/{safe}/propose",
+      "actor": "safe-labs",
+      "purpose": "Store the SafeTx (to, value, data, nonce, safeTxHash, sender) in the queue before execution",
+      "need": "W",
+      "carries": ["ip", "selected_address", "safe_address", "recipient", "amount", "unsigned_tx"],
+      "returns": "txId",
+      "can_block": true,
+      "on_failure": "blocks",
+      "worst_lie": {
+        "outcome": "none",
+        "note": "the answer is not signed; a refusal stops execution"
+      },
+      "removable_by": "none",
+      "provenance": {
+        "status": "code",
+        "ref": "safe-wallet-monorepo@7137337 apps/web/src/components/tx/shared/hooks.ts:263 (awaited before dispatchTxExecution) · packages/store/src/gateway/AUTO_GENERATED/transactions.ts:134 · CGW → Transaction Service safe-client-gateway@158f5db src/modules/transactions/datasources/transaction-api.service.ts:1133-1161"
+      },
+      "gadget": "wallet-backend",
+      "notes": "With threshold 1 the proposal carries no signature; execution adds a pre-validated signature for the executing owner."
+    }
+  ],
+  "drop_steps": ["etherscan-check"],
+  "insert_steps": [
+    {
+      "after": "receipt-poll",
+      "step": {
+        "id": "sf-rpc-watch",
+        "phase": "confirm",
+        "name": "Safe{Wallet} RPC · receipt watcher",
+        "host": "unknown — rpcUri from the CGW chain config, NEXT_PUBLIC_INFURA_TOKEN appended",
+        "actor": "unknown",
+        "purpose": "eth_getTransactionReceipt(hash) and the owner's tx count on every block until mined",
+        "need": "R",
+        "carries": ["ip", "tx_hash", "selected_address"],
+        "returns": "mined or not",
+        "can_block": false,
+        "on_failure": "degrade",
+        "worst_lie": {
+          "outcome": "false_belief",
+          "note": "shows success or failure that did not happen"
+        },
+        "removable_by": "safe_custom_rpc",
+        "provenance": {
+          "status": "code",
+          "ref": "safe-wallet-monorepo@7137337 packages/utils/src/services/SimpleTxWatcher.ts:45,51"
+        },
+        "repeat": "↻ until mined",
+        "fixed_by": ["verifiable-rpc", "private-rpc"],
+        "gadget": "rpc"
+      }
+    },
+    {
+      "after": "sf-rpc-watch",
+      "step": {
+        "id": "sf-tx-status",
+        "phase": "confirm",
+        "name": "CGW · tx status + details",
+        "host": "safe-client.safe.global/v1/chains/1/transactions/{txId}",
+        "actor": "safe-labs",
+        "purpose": "Success screen; queue and history refresh",
+        "need": "R",
+        "carries": ["ip", "safe_address", "tx_hash"],
+        "returns": "executed or not",
+        "can_block": false,
+        "on_failure": "degrade",
+        "worst_lie": {
+          "outcome": "false_belief",
+          "note": "shows a status that is not on chain"
+        },
+        "removable_by": "none",
+        "provenance": {
+          "status": "code",
+          "ref": "safe-wallet-monorepo@7137337 apps/web/src/utils/transactions.ts:552 (multisig_{safe}_{hash}) · apps/web/src/services/tx/txMonitor.ts:80-96"
+        },
+        "repeat": "↻ 15 s",
+        "fixed_by": ["local-indexing"],
+        "gadget": "indexer"
+      }
+    }
+  ]
+}
